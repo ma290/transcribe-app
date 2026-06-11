@@ -1,0 +1,110 @@
+/* Transcription Section Styles */
+
+.transcription-section {
+  background-color: var(--elevation-background);
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.upload-zone {
+  border: 2px dashed var(--primary-color);
+  border-radius: 8px;
+  padding: 40px;
+  text-align: center;
+  transition: background-color 0.3s ease;
+  cursor: pointer;
+}
+
+.upload-zone:hover {
+  background-color: rgba(0, 153, 255, 0.05);
+}
+
+.upload-zone.dragover {
+  background-color: rgba(0, 153, 255, 0.1);
+  border-color: #0077cc;
+}
+
+/* Speaker Manager */
+.speaker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.speaker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background-color: var(--bg-color);
+  border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.1);
+}
+
+.dark .speaker-item {
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.speaker-item label {
+  font-weight: bold;
+  font-size: 0.9rem;
+  width: 80px;
+}
+
+.speaker-item input {
+  flex: 1;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  background-color: var(--elevation-background);
+  color: var(--text-color);
+}
+
+.dark .speaker-item input {
+  border: 1px solid #444;
+}
+
+/* Live Transcript */
+.live-transcript-box {
+  background-color: var(--bg-color);
+  border: 1px solid rgba(0,0,0,0.1);
+  border-radius: 8px;
+  padding: 15px;
+  height: 300px;
+  overflow-y: auto;
+  font-size: 1.1rem;
+  line-height: 1.6;
+}
+
+.dark .live-transcript-box {
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+.transcript-speaker-block {
+  margin-bottom: 15px;
+}
+
+.transcript-speaker-name {
+  font-weight: bold;
+  color: var(--primary-color);
+  margin-bottom: 5px;
+  display: block;
+}
+
+.transcript-word {
+  cursor: pointer;
+  padding: 2px 0;
+  border-radius: 3px;
+  transition: background-color 0.1s, color 0.1s;
+}
+
+.transcript-word:hover {
+  background-color: rgba(0, 153, 255, 0.1);
+}
+
+.transcript-word.highlight {
+  background-color: var(--primary-color);
+  color: #fff;
+}
