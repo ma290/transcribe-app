@@ -2,6 +2,7 @@
 // Handles audio upload, API calls, and the live transcript UI.
 
 const transcriptionApiUrl = "/api/transcribe";
+const MAX_CHUNK_SECONDS = 5 * 60;
 
 // State
 let transcriptionWords = [];
@@ -16,6 +17,12 @@ const uploadStatus = document.getElementById("upload-status");
 
 const audioPlayerContainer = document.getElementById("audio-player-container");
 const audioPlayer = document.getElementById("audio-player");
+const playPauseBtn = document.getElementById("play-pause-btn");
+const equalizerBars = document.getElementById("equalizer-bars");
+const nowPlayingLabel = document.getElementById("now-playing-label");
+const audioSeek = document.getElementById("audio-seek");
+const audioCurrentTime = document.getElementById("audio-current-time");
+const audioDuration = document.getElementById("audio-duration");
 const transcriptionTools = document.getElementById("transcription-tools");
 const speakerManagerList = document.getElementById("speaker-manager-list");
 const liveTranscript = document.getElementById("live-transcript");
@@ -23,9 +30,13 @@ const syncTranscriptBtn = document.getElementById("sync-transcript-button");
 const noteEditor = document.getElementById("note");
 
 export function initTranscription() {
-  // Setup upload zone
   browseBtn.addEventListener("click", () => fileInput.click());
-  
+
+  uploadZone.addEventListener("click", (e) => {
+    if (e.target === browseBtn || browseBtn.contains(e.target)) return;
+    fileInput.click();
+  });
+
   uploadZone.addEventListener("dragover", (e) => {
     e.preventDefault();
     uploadZone.classList.add("dragover");
@@ -50,73 +61,292 @@ export function initTranscription() {
     }
   });
 
-  // Setup Audio Player Time Update
+  // Setup Audio Player
   audioPlayer.addEventListener("timeupdate", handleTimeUpdate);
+  audioPlayer.addEventListener("loadedmetadata", updateAudioDuration);
+  audioPlayer.addEventListener("play", () => setPlayingState(true));
+  audioPlayer.addEventListener("pause", () => setPlayingState(false));
+  audioPlayer.addEventListener("ended", () => setPlayingState(false));
 
-  // Sync button
+  playPauseBtn.addEventListener("click", togglePlayPause);
+  audioSeek.addEventListener("input", handleSeek);
+
+  document.addEventListener("keydown", handleSpacebar);
+
   syncTranscriptBtn.addEventListener("click", syncToEditor);
 }
 
+function isTypingTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
+function handleSpacebar(e) {
+  if (e.code !== "Space" && e.key !== " ") return;
+  if (isTypingTarget(e.target)) return;
+  if (!audioPlayerContainer.classList.contains("visible")) return;
+
+  e.preventDefault();
+  togglePlayPause();
+}
+
+function togglePlayPause() {
+  if (!audioPlayer.src) return;
+  if (audioPlayer.paused) {
+    audioPlayer.play();
+  } else {
+    audioPlayer.pause();
+  }
+}
+
+function setPlayingState(playing) {
+  playPauseBtn.classList.toggle("playing", playing);
+  equalizerBars.classList.toggle("playing", playing);
+  nowPlayingLabel.textContent = playing ? "Now playing" : "Paused";
+}
+
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds)) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function updateAudioDuration() {
+  audioDuration.textContent = formatTime(audioPlayer.duration);
+  audioSeek.max = audioPlayer.duration || 100;
+}
+
+function handleSeek() {
+  const time = parseFloat(audioSeek.value);
+  audioPlayer.currentTime = time;
+  updateSeekBar();
+}
+
+function updateSeekBar() {
+  const pct = audioPlayer.duration
+    ? (audioPlayer.currentTime / audioPlayer.duration) * 100
+    : 0;
+  audioSeek.value = audioPlayer.currentTime;
+  audioSeek.style.setProperty("--seek-pct", `${pct}%`);
+  audioCurrentTime.textContent = formatTime(audioPlayer.currentTime);
+}
+
+function setUploadStatus(text, type = "") {
+  uploadStatus.textContent = text;
+  uploadStatus.className = "upload-status" + (type ? ` ${type}` : "");
+}
+
+function showPlayer(fileName) {
+  audioPlayerContainer.classList.add("visible");
+  nowPlayingLabel.textContent = fileName || "Ready to play";
+}
+
+function showTranscriptionTools() {
+  transcriptionTools.classList.add("visible");
+}
+
 async function handleAudioFile(file) {
-  // Validate file type
-  const validTypes = ["audio/mpeg", "audio/wav", "audio/x-m4a", "audio/m4a"];
-  // If we want to be more lenient, we can just check extensions
   const fileName = file.name.toLowerCase();
   if (!fileName.endsWith('.mp3') && !fileName.endsWith('.wav') && !fileName.endsWith('.m4a')) {
     alert("Please upload a valid audio file (.mp3, .wav, .m4a)");
     return;
   }
 
-  // Set audio source for player
   const objectUrl = URL.createObjectURL(file);
   audioPlayer.src = objectUrl;
-  audioPlayerContainer.style.display = "block";
+  showPlayer(file.name);
 
-  // Upload to API
-  uploadStatus.textContent = "Transcribing audio... this may take a while.";
-  transcriptionTools.style.display = "none";
-  
-  const formData = new FormData();
-  formData.append("file", file);
+  setUploadStatus("Preparing audio for transcription...", "loading");
+  transcriptionTools.classList.remove("visible");
 
   try {
-    const response = await fetch(transcriptionApiUrl, {
-      method: "POST",
-      headers: {
-        "accept": "application/json"
-      },
-      body: formData
-    });
+    let decodedInfo = null;
 
-    if (!response.ok) {
-      throw new Error(`API returned status ${response.status}`);
+    try {
+      decodedInfo = await decodeAudioForDuration(file);
+    } catch (decodeError) {
+      console.warn("Browser decode failed, falling back to direct upload.", decodeError);
     }
 
-    const data = await response.json();
+    const durationInSeconds = decodedInfo ? decodedInfo.duration : 0;
 
-    const fullPayload = data.full_response?.data || data.full_response || data.data || {};
-    const transcription = fullPayload.transcription || fullPayload.result?.transcription || data.transcription || data.result?.transcription;
-    const words = transcription?.words || transcription?.segments || [];
-
-    if (data.success && words.length > 0) {
-      processTranscription(words);
-      uploadStatus.textContent = "Transcription complete!";
-      setTimeout(() => { uploadStatus.textContent = ""; }, 3000);
-      return;
+    if (decodedInfo && durationInSeconds > MAX_CHUNK_SECONDS) {
+      try {
+        await transcribeInChunks(file, durationInSeconds, decodedInfo.audioBuffer);
+      } catch (chunkError) {
+        console.warn("Chunked transcription failed, falling back to direct upload.", chunkError);
+        await transcribeSingleFile(file);
+      }
+    } else {
+      await transcribeSingleFile(file);
     }
-
-    if (data.success && data.transcript) {
-      uploadStatus.textContent = "Transcription complete!";
-      setTimeout(() => { uploadStatus.textContent = ""; }, 3000);
-      return;
-    }
-
-    throw new Error("Invalid response format from transcription API.");
-
   } catch (error) {
     console.error(error);
-    uploadStatus.textContent = "Error during transcription: " + error.message;
+    setUploadStatus("Error during transcription: " + error.message, "error");
+  } finally {
+    // Keep objectUrl alive so audioPlayer can continue playing it.
   }
+}
+
+async function transcribeSingleFile(file) {
+  setUploadStatus("Transcribing audio... this may take a while.", "loading");
+
+  const data = await sendTranscriptionRequest(file);
+  const words = extractWordsFromResponse(data);
+
+  if (words.length > 0) {
+    processTranscription(words);
+    setUploadStatus("Transcription complete!", "success");
+    setTimeout(() => { setUploadStatus(""); }, 3000);
+    return;
+  }
+
+  throw new Error("Invalid response format from transcription API.");
+}
+
+async function transcribeInChunks(file, durationInSeconds, audioBuffer) {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    const decodedBuffer = audioBuffer || await audioContext.decodeAudioData(await file.arrayBuffer().then((buffer) => buffer.slice(0)));
+    const finalBuffer = decodedBuffer || audioBuffer;
+    const totalChunks = Math.ceil(durationInSeconds / MAX_CHUNK_SECONDS);
+
+    const allWords = [];
+    for (let index = 0; index < totalChunks; index += 1) {
+      const chunkStart = index * MAX_CHUNK_SECONDS;
+      const chunkEnd = Math.min(chunkStart + MAX_CHUNK_SECONDS, durationInSeconds);
+      const chunkBuffer = createChunkBuffer(finalBuffer, chunkStart, chunkEnd);
+      const chunkBlob = audioBufferToWav(chunkBuffer);
+
+      setUploadStatus(`Transcribing chunk ${index + 1} of ${totalChunks}...`, "loading");
+
+      const data = await sendTranscriptionRequest(chunkBlob, `${file.name}-${index + 1}.wav`);
+      const words = extractWordsFromResponse(data);
+
+      words.forEach((word) => {
+        const adjustedWord = { ...word };
+        if (typeof adjustedWord.start === "number") adjustedWord.start += chunkStart;
+        if (typeof adjustedWord.end === "number") adjustedWord.end += chunkStart;
+        allWords.push(adjustedWord);
+      });
+    }
+
+    allWords.sort((a, b) => (a.start || 0) - (b.start || 0));
+    processTranscription(allWords);
+    setUploadStatus("Transcription complete!", "success");
+    setTimeout(() => { setUploadStatus(""); }, 3000);
+  } finally {
+    await audioContext.close().catch(() => {});
+  }
+}
+
+async function decodeAudioForDuration(file) {
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+    return {
+      duration: Number.isFinite(audioBuffer.duration) ? audioBuffer.duration : 0,
+      audioBuffer
+    };
+  } finally {
+    await audioContext.close().catch(() => {});
+  }
+}
+
+async function sendTranscriptionRequest(fileLike, fileName = null) {
+  const formData = new FormData();
+  formData.append("file", fileLike, fileName || undefined);
+
+  const response = await fetch(transcriptionApiUrl, {
+    method: "POST",
+    headers: { accept: "application/json" },
+    body: formData
+  });
+
+  if (!response.ok) {
+    throw new Error(`API returned status ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function extractWordsFromResponse(data) {
+  const fullPayload = (data.full_response && data.full_response.data) || data.full_response || data.data || {};
+  const transcription = fullPayload.transcription ||
+    (fullPayload.result && fullPayload.result.transcription) ||
+    data.transcription ||
+    (data.result && data.result.transcription) ||
+    {};
+  return transcription.words || transcription.segments || [];
+}
+
+function createChunkBuffer(audioBuffer, startSeconds, endSeconds) {
+  const startSample = Math.floor(startSeconds * audioBuffer.sampleRate);
+  const endSample = Math.min(audioBuffer.length, Math.floor(endSeconds * audioBuffer.sampleRate));
+  const sampleLength = Math.max(1, endSample - startSample);
+  const chunkBuffer = new AudioBuffer({
+    length: sampleLength,
+    numberOfChannels: audioBuffer.numberOfChannels,
+    sampleRate: audioBuffer.sampleRate
+  });
+
+  for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
+    const sourceData = audioBuffer.getChannelData(channel);
+    const chunkData = chunkBuffer.getChannelData(channel);
+
+    for (let i = 0; i < sampleLength; i += 1) {
+      chunkData[i] = sourceData[startSample + i] || 0;
+    }
+  }
+
+  return chunkBuffer;
+}
+
+function audioBufferToWav(audioBuffer) {
+  const numberOfChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const format = 1;
+  const bitDepth = 16;
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numberOfChannels * bytesPerSample;
+  const dataLength = audioBuffer.length * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, string) => {
+    for (let i = 0; i < string.length; i += 1) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(36, "data");
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < audioBuffer.length; i += 1) {
+    for (let channel = 0; channel < numberOfChannels; channel += 1) {
+      const sample = Math.max(-1, Math.min(1, audioBuffer.getChannelData(channel)[i] || 0));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
 }
 
 function processTranscription(words) {
@@ -135,8 +365,8 @@ function processTranscription(words) {
 
   renderSpeakerManager();
   renderLiveTranscript();
-  
-  transcriptionTools.style.display = "block";
+
+  showTranscriptionTools();
 }
 
 function renderSpeakerManager() {
@@ -222,6 +452,7 @@ function updateSpeakerLabelsInTranscript() {
 
 function handleTimeUpdate() {
   const currentTime = audioPlayer.currentTime;
+  updateSeekBar();
   
   // Optional: Optimize with binary search if transcriptionWords is very large
   // For now, simple linear iteration or keeping track of an index works.
@@ -282,8 +513,8 @@ function syncToEditor() {
   });
 
   // The existing editor is a contenteditable div, so we can set its innerText or innerHTML.
-  // Using innerText preserves the newlines.
-  noteEditor.innerText = textContent.trim();
+  // Using innerHTML with <br/> preserves the newlines.
+  noteEditor.innerHTML = textContent.trim().replace(/\n/g, '<br/>');
   
   // Highlight the Editor so the user sees it happened
   noteEditor.style.backgroundColor = "rgba(0, 153, 255, 0.2)";
