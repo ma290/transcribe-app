@@ -71,14 +71,29 @@ function proxyToTranscribe(req, res) {
 
     res.writeHead(proxyRes.statusCode || 500, responseHeaders);
     proxyRes.pipe(res);
+
+    proxyRes.on('error', (err) => {
+      console.error('Proxy response error:', err);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ success: false, error: 'Proxy response failed.' }));
+      } else {
+        res.end();
+      }
+    });
+
+    res.on('close', () => proxyReq.destroy());
   });
 
   proxyReq.on('error', (err) => {
     console.error('Proxy error:', err);
-    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ success: false, error: 'Proxy request failed.' }));
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ success: false, error: 'Proxy request failed.' }));
+    }
   });
 
+  req.on('error', () => proxyReq.destroy());
   req.pipe(proxyReq);
 }
 
